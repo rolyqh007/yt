@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>YT Downloader</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+<script>tailwind.config = { darkMode: 'class' }</script>
+</head>
+<body class="bg-zinc-950 min-h-screen flex items-center justify-center p-4">
+
+<div id="app" class="w-full max-w-xl">
+
+  <div class="flex items-center gap-3 mb-8">
+    <i class="fa-brands fa-youtube text-red-500 text-4xl"></i>
+    <div>
+      <h1 class="text-white text-2xl font-semibold">YT Downloader</h1>
+      <p class="text-zinc-500 text-sm">Descarga directa en tu navegador</p>
+    </div>
+  </div>
+
+  <!-- SW status -->
+  <div id="swStatus" class="mb-4 px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 bg-zinc-900 border border-zinc-800 text-zinc-500">
+    <i class="fa-solid fa-circle-notch fa-spin"></i> Iniciando...
+  </div>
+
+  <div class="flex gap-2 mb-4">
+    <input id="urlInput" type="text"
+      placeholder="https://www.youtube.com/watch?v=..."
+      class="flex-1 bg-zinc-900 border border-zinc-700 text-white text-sm rounded-xl px-4 py-3 outline-none focus:border-red-500 transition placeholder-zinc-600"
+    />
+    <button onclick="loadVideo()"
+      class="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-5 py-3 rounded-xl transition flex items-center gap-2">
+      <i class="fa-solid fa-magnifying-glass"></i> Buscar
+    </button>
+  </div>
+
+  <!-- Video info -->
+  <div id="videoInfo" class="hidden bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-4">
+    <div class="flex gap-3 mb-4">
+      <img id="thumb" src="" alt="" class="w-28 h-20 object-cover rounded-lg flex-shrink-0" />
+      <div class="min-w-0">
+        <p id="title" class="text-white text-sm font-medium leading-snug mb-1 line-clamp-2"></p>
+        <p id="author" class="text-zinc-500 text-xs"></p>
+        <p id="duration" class="text-zinc-600 text-xs mt-1"></p>
+      </div>
+    </div>
+
+    <p class="text-zinc-500 text-xs mb-2">Calidad de video</p>
+    <div id="qualityBtns" class="flex flex-wrap gap-2 mb-4"></div>
+
+    <div class="flex gap-2 mb-4">
+      <button onclick="setMode('video')" id="modeVideo"
+        class="flex-1 border text-xs font-medium py-2 rounded-xl transition bg-red-600 text-white border-red-600">
+        <i class="fa-solid fa-film mr-1"></i> Video + Audio
+      </button>
+      <button onclick="setMode('audio')" id="modeAudio"
+        class="flex-1 border border-zinc-700 text-zinc-400 text-xs font-medium py-2 rounded-xl transition hover:border-zinc-500">
+        <i class="fa-solid fa-music mr-1"></i> Solo Audio (MP3)
+      </button>
+    </div>
+
+    <button onclick="startDownload()"
+      class="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2">
+      <i class="fa-solid fa-download"></i> Descargar
+    </button>
+  </div>
+
+  <!-- Progress -->
+  <div id="progressBox" class="hidden bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-4">
+    <p id="progressLabel" class="text-zinc-300 text-sm mb-3">Iniciando...</p>
+    <div class="w-full bg-zinc-800 rounded-full h-2 mb-1">
+      <div id="progressBar" class="bg-red-500 h-2 rounded-full transition-all duration-300" style="width:0%"></div>
+    </div>
+    <p id="progressPct" class="text-zinc-500 text-xs text-right">0%</p>
+  </div>
+
+  <div id="errorBox" class="hidden bg-red-950 border border-red-800 text-red-300 text-sm rounded-xl px-4 py-3 mb-4">
+    <i class="fa-solid fa-triangle-exclamation mr-2"></i><span id="errorMsg"></span>
+  </div>
+
+  <p class="text-center text-zinc-700 text-xs mt-6">Todo corre en tu navegador · Sin servidores</p>
+</div>
+
+<!-- FFmpeg.wasm -->
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+
+<script>
+const { FFmpeg } = FFmpegWASM;
+const { fetchFile, toBlobURL } = FFmpegUtil;
+
+let ffmpeg = null;
+let streamData = null;
+let selectedQuality = null;
+let mode = 'video';
+let swReady = false;
+
+// Registrar Service Worker
+async function initSW() {
+  const el = document.getElementById('swStatus');
+  if (!('serviceWorker' in navigator)) {
+    el.innerHTML = '<i class="fa-solid fa-circle-xmark text-red-400"></i> <span class="text-red-400">Tu navegador no soporta Service Workers</span>';
+    return;
+  }
+  try {
+    const reg = await navigator.serviceWorker.register('./sw.js');
+    await navigator.serviceWorker.ready;
+    swReady = true;
+    el.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-400"></i> <span class="text-emerald-400">Listo — proxy activo en tu navegador</span>';
+  } catch (e) {
+    el.innerHTML = `<i class="fa-solid fa-circle-xmark text-red-400"></i> <span class="text-red-400">Error SW: ${e.message}</span>`;
+  }
+}
+
+initSW();
+
+function getVideoId(url) {
+  const m = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function fmtDuration(s) {
+  const m = Math.floor(s / 60), sec = s % 60;
+  return `${m}:${sec.toString().padStart(2,'0')}`;
+}
+
+function showError(msg) {
+  document.getElementById('errorBox').classList.remove('hidden');
+  document.getElementById('errorMsg').textContent = msg;
+}
+function hideError() { document.getElementById('errorBox').classList.add('hidden'); }
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('modeVideo').className = m === 'video'
+    ? 'flex-1 border text-xs font-medium py-2 rounded-xl transition bg-red-600 text-white border-red-600'
+    : 'flex-1 border border-zinc-700 text-zinc-400 text-xs font-medium py-2 rounded-xl transition hover:border-zinc-500';
+  document.getElementById('modeAudio').className = m === 'audio'
+    ? 'flex-1 border text-xs font-medium py-2 rounded-xl transition bg-red-600 text-white border-red-600'
+    : 'flex-1 border border-zinc-700 text-zinc-400 text-xs font-medium py-2 rounded-xl transition hover:border-zinc-500';
+}
+
+async function loadVideo() {
+  hideError();
+  if (!swReady) { showError('Espera a que el Service Worker esté listo.'); return; }
+
+  const url = document.getElementById('urlInput').value.trim();
+  const videoId = getVideoId(url);
+  if (!videoId) { showError('URL de YouTube no válida.'); return; }
+
+  try {
+    // Llamar al SW vía fetch local
+    const res = await fetch(`/yt-info?id=${videoId}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    streamData = data;
+    renderVideoInfo(data);
+  } catch(e) {
+    showError('Error: ' + e.message);
+  }
+}
+
+function renderVideoInfo(data) {
+  document.getElementById('thumb').src = data.thumbnail;
+  document.getElementById('title').textContent = data.title;
+  document.getElementById('author').textContent = data.author;
+  document.getElementById('duration').textContent = fmtDuration(data.duration);
+
+  const allStreams = [...(data.videoStreams || []), ...(data.combined || [])];
+  const order = ['2160p','1440p','1080p','720p','480p','360p','240p','144p'];
+  const seen = new Set();
+  const btns = document.getElementById('qualityBtns');
+  btns.innerHTML = '';
+
+  allStreams
+    .filter(s => s.quality)
+    .sort((a,b) => order.indexOf(a.quality) - order.indexOf(b.quality))
+    .forEach(s => {
+      if (seen.has(s.quality)) return;
+      seen.add(s.quality);
+      const b = document.createElement('button');
+      b.textContent = s.quality;
+      b.dataset.quality = s.quality;
+      b.onclick = () => selectQuality(s.quality, b);
+      b.className = 'border border-zinc-700 text-zinc-400 text-xs px-3 py-1.5 rounded-full transition hover:border-zinc-500';
+      btns.appendChild(b);
+    });
+
+  if (!btns.children.length) {
+    const b = document.createElement('button');
+    b.textContent = 'Auto';
+    b.dataset.quality = 'auto';
+    b.onclick = () => selectQuality('auto', b);
+    b.className = 'border border-zinc-700 text-zinc-400 text-xs px-3 py-1.5 rounded-full transition';
+    btns.appendChild(b);
+  }
+
+  btns.querySelector('button')?.click();
+  document.getElementById('videoInfo').classList.remove('hidden');
+  document.getElementById('progressBox').classList.add('hidden');
+}
+
+function selectQuality(q, btn) {
+  selectedQuality = q;
+  document.querySelectorAll('#qualityBtns button').forEach(b => {
+    b.className = 'border border-zinc-700 text-zinc-400 text-xs px-3 py-1.5 rounded-full transition hover:border-zinc-500';
+  });
+  btn.className = 'border border-red-500 bg-red-600 text-white text-xs px-3 py-1.5 rounded-full transition';
+}
+
+function setProgress(label, pct) {
+  document.getElementById('progressLabel').textContent = label;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressPct').textContent = pct + '%';
+}
+
+async function startDownload() {
+  if (!streamData) return;
+  hideError();
+  document.getElementById('progressBox').classList.remove('hidden');
+  setProgress('Cargando FFmpeg.wasm...', 5);
+
+  try {
+    if (!ffmpeg) {
+      ffmpeg = new FFmpeg();
+      ffmpeg.on('progress', ({ progress }) => {
+        setProgress('Procesando con FFmpeg...', Math.round(40 + progress * 55));
+      });
+      const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+    }
+
+    mode === 'audio' ? await downloadAudio() : await downloadVideo();
+
+  } catch(e) {
+    showError('Error: ' + e.message);
+    document.getElementById('progressBox').classList.add('hidden');
+  }
+}
+
+async function downloadVideo() {
+  const allStreams = [...(streamData.videoStreams || []), ...(streamData.combined || [])];
+  const videoStream = allStreams.find(s => s.quality === selectedQuality) || allStreams[0];
+  const audioStream = streamData.audioStreams?.[0];
+  if (!videoStream) throw new Error('No hay stream de video disponible');
+
+  const isCombined = streamData.combined?.some(s => s.url === videoStream.url);
+
+  setProgress('Descargando video...', 15);
+  await ffmpeg.writeFile('video.webm', await fetchFile(videoStream.url));
+
+  if (!isCombined && audioStream) {
+    setProgress('Descargando audio...', 30);
+    await ffmpeg.writeFile('audio.webm', await fetchFile(audioStream.url));
+    setProgress('Muxeando...', 40);
+    await ffmpeg.exec(['-i','video.webm','-i','audio.webm','-c','copy','output.mp4']);
+  } else {
+    setProgress('Procesando...', 40);
+    await ffmpeg.exec(['-i','video.webm','-c','copy','output.mp4']);
+  }
+
+  setProgress('Guardando...', 98);
+  const data = await ffmpeg.readFile('output.mp4');
+  triggerSave(data, 'video/mp4', `${streamData.title}.mp4`);
+  setProgress('¡Listo!', 100);
+}
+
+async function downloadAudio() {
+  const audioStream = streamData.audioStreams?.[0];
+  if (!audioStream) throw new Error('No hay stream de audio');
+
+  setProgress('Descargando audio...', 20);
+  await ffmpeg.writeFile('audio.webm', await fetchFile(audioStream.url));
+
+  setProgress('Convirtiendo a MP3...', 40);
+  await ffmpeg.exec(['-i','audio.webm','-vn','-ab','192k','output.mp3']);
+
+  setProgress('Guardando...', 98);
+  const data = await ffmpeg.readFile('output.mp3');
+  triggerSave(data, 'audio/mpeg', `${streamData.title}.mp3`);
+  setProgress('¡Listo!', 100);
+}
+
+function triggerSave(data, mime, filename) {
+  const blob = new Blob([data.buffer], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename.replace(/[/\\?%*:|"<>]/g, '-');
+  a.click();
+}
+</script>
+</body>
+</html>
