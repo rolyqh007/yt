@@ -20,9 +20,12 @@
     </div>
   </div>
 
-  <!-- SW status -->
-  <div id="swStatus" class="mb-4 px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 bg-zinc-900 border border-zinc-800 text-zinc-500">
-    <i class="fa-solid fa-circle-notch fa-spin"></i> Iniciando...
+  <!-- Worker URL -->
+  <div class="mb-4">
+    <label class="text-zinc-400 text-xs mb-1 block">URL de tu Cloudflare Worker</label>
+    <input id="workerUrl" type="text" value="https://mute-block-c912.roly-quellca-hancco.workers.dev"
+      class="w-full bg-zinc-900 border border-zinc-700 text-white text-sm rounded-xl px-4 py-2.5 outline-none focus:border-red-500 transition placeholder-zinc-600"
+    />
   </div>
 
   <div class="flex gap-2 mb-4">
@@ -80,7 +83,7 @@
     <i class="fa-solid fa-triangle-exclamation mr-2"></i><span id="errorMsg"></span>
   </div>
 
-  <p class="text-center text-zinc-700 text-xs mt-6">Todo corre en tu navegador · Sin servidores</p>
+  <p class="text-center text-zinc-700 text-xs mt-6">Todo el procesamiento ocurre en tu navegador · Sin servidores propios</p>
 </div>
 
 <!-- FFmpeg.wasm -->
@@ -95,26 +98,6 @@ let ffmpeg = null;
 let streamData = null;
 let selectedQuality = null;
 let mode = 'video';
-let swReady = false;
-
-// Registrar Service Worker
-async function initSW() {
-  const el = document.getElementById('swStatus');
-  if (!('serviceWorker' in navigator)) {
-    el.innerHTML = '<i class="fa-solid fa-circle-xmark text-red-400"></i> <span class="text-red-400">Tu navegador no soporta Service Workers</span>';
-    return;
-  }
-  try {
-    const reg = await navigator.serviceWorker.register('./sw.js');
-    await navigator.serviceWorker.ready;
-    swReady = true;
-    el.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-400"></i> <span class="text-emerald-400">Listo — proxy activo en tu navegador</span>';
-  } catch (e) {
-    el.innerHTML = `<i class="fa-solid fa-circle-xmark text-red-400"></i> <span class="text-red-400">Error SW: ${e.message}</span>`;
-  }
-}
-
-initSW();
 
 function getVideoId(url) {
   const m = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -144,15 +127,15 @@ function setMode(m) {
 
 async function loadVideo() {
   hideError();
-  if (!swReady) { showError('Espera a que el Service Worker esté listo.'); return; }
-
   const url = document.getElementById('urlInput').value.trim();
   const videoId = getVideoId(url);
   if (!videoId) { showError('URL de YouTube no válida.'); return; }
 
+  const workerUrl = document.getElementById('workerUrl').value.trim().replace(/\/$/, '');
+  if (!workerUrl) { showError('Configura la URL de tu Cloudflare Worker.'); return; }
+
   try {
-    // Llamar al SW vía fetch local
-    const res = await fetch(`/yt-info?id=${videoId}`);
+    const res = await fetch(`${workerUrl}/?id=${videoId}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     streamData = data;
